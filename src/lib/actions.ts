@@ -438,3 +438,165 @@ export async function updatePlayer(formData: FormData) {
   revalidatePath("/matches");
   revalidatePath("/", "layout"); // Para que se actualice en las vistas de los partidos
 }
+// Añadir al final de src/lib/actions.ts
+
+// En src/lib/actions.ts actualiza esta función:
+
+export async function createMatch(formData: FormData) {
+  const supabase = await createClient();
+  const home_team_id = formData.get("home_team_id") as string;
+  const away_team_id = formData.get("away_team_id") as string;
+
+  if (home_team_id === away_team_id)
+    throw new Error("Un equipo no puede jugar contra sí mismo.");
+
+  const { error } = await supabase.from("matches").insert([
+    {
+      home_team_id,
+      away_team_id,
+      home_score: 0,
+      away_score: 0,
+      status: "SCHEDULED",
+      match_date: new Date().toISOString(), // 🌟 ¡AÑADE ESTA LÍNEA AQUÍ!
+    },
+  ]);
+
+  if (error) throw new Error(error.message);
+
+  revalidatePath("/admin");
+  revalidatePath("/", "layout");
+}
+
+export async function simulateMatch(formData: FormData) {
+  const supabase = await createClient();
+  const matchId = formData.get("matchId") as string;
+
+  // 1. Conseguir los datos del partido
+  const { data: match } = await supabase
+    .from("matches")
+    .select("*")
+    .eq("id", matchId)
+    .single();
+  if (!match) throw new Error("Partido no encontrado");
+
+  // 2. Traer los jugadores de ambos equipos para repartir los sucesos
+  const { data: homePlayers } = await supabase
+    .from("players")
+    .select("id, team_id")
+    .eq("team_id", match.home_team_id);
+  const { data: awayPlayers } = await supabase
+    .from("players")
+    .select("id, team_id")
+    .eq("team_id", match.away_team_id);
+
+  if (
+    !homePlayers ||
+    !awayPlayers ||
+    homePlayers.length === 0 ||
+    awayPlayers.length === 0
+  ) {
+    throw new Error(
+      "Ambos equipos deben tener jugadores registrados para poder simular",
+    );
+  }
+
+  // Helper para sacar un jugador aleatorio de una lista
+  const getRandomPlayer = (playersList: any[]) =>
+    playersList[Math.floor(Math.random() * playersList.length)];
+
+  // 3. Generar estadísticas aleatorias lógicas (Goles entre 0 y 4 por equipo)
+  const homeScore = Math.floor(Math.random() * 5);
+  const awayScore = Math.floor(Math.random() * 5);
+
+  const eventsToInsert: any[] = [];
+
+  // Simular eventos del Equipo Local
+  for (let i = 0; i < homeScore; i++) {
+    const scorer = getRandomPlayer(homePlayers);
+    const minute = Math.floor(Math.random() * 90) + 1;
+    eventsToInsert.push({
+      match_id: matchId,
+      player_id: scorer.id,
+      team_id: match.home_team_id,
+      type: "GOAL",
+      minute,
+    });
+
+    // 50% de probabilidad de que el gol tenga asistencia
+    if (Math.random() > 0.5 && homePlayers.length > 1) {
+      let assistor = getRandomPlayer(homePlayers);
+      while (assistor.id === scorer.id) {
+        assistor = getRandomPlayer(homePlayers);
+      } // Que no se asista a sí mismo
+      eventsToInsert.push({
+        match_id: matchId,
+        player_id: assistor.id,
+        team_id: match.home_team_id,
+        type: "ASSIST",
+        minute,
+      });
+    }
+  }
+
+  // Simular eventos del Equipo Visitante
+  for (let i = 0; i < awayScore; i++) {
+    const scorer = getRandomPlayer(awayPlayers);
+    const minute = Math.floor(Math.random() * 90) + 1;
+    eventsToInsert.push({
+      match_id: matchId,
+      player_id: scorer.id,
+      team_id: match.away_team_id,
+      type: "GOAL",
+      minute,
+    });
+
+    if (Math.random() > 0.5 && awayPlayers.length > 1) {
+      let assistor = getRandomPlayer(awayPlayers);
+      while (assistor.id === scorer.id) {
+        assistor = getRandomPlayer(awayPlayers);
+      }
+      eventsToInsert.push({
+        match_id: matchId,
+        player_id: assistor.id,
+        team_id: match.away_team_id,
+        type: "ASSIST",
+        minute,
+      });
+    }
+  }
+
+  // Tarjetas aleatorias (entre 1 y 4 amarillas repartidas por el partido)
+  const totalCards = Math.floor(Math.random() * 4) + 1;
+  for (let i = 0; i < totalCards; i++) {
+    const isHome = Math.random() > 0.5;
+    const player = getRandomPlayer(isHome ? homePlayers : awayPlayers);
+    const minute = Math.floor(Math.random() * 90) + 1;
+    eventsToInsert.push({
+      match_id: matchId,
+      player_id: player.id,
+      team_id: player.team_id,
+      type: Math.random() > 0.9 ? "RED_CARD" : "YELLOW_CARD", // 10% de que sea roja
+      minute,
+    });
+  }
+
+  // 4. Guardar todo en Supabase
+  // Actualizamos el marcador del partido
+  await supabase
+    .from("matches")
+    .update({
+      home_score: homeScore,
+      away_score: awayScore,
+      status: "FINISHED",
+    })
+    .eq("id", matchId);
+
+  // Insertamos la lluvia de actas e incidencias generadas
+  if (eventsToInsert.length > 0) {
+    await supabase.from("match_events").insert(eventsToInsert);
+  }
+
+  revalidatePath("/admin");
+  revalidatePath(`/matches/${matchId}`);
+  revalidatePath("/");
+}

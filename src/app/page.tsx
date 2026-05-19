@@ -1,8 +1,10 @@
 // src/app/page.tsx
-import { getDashboardMatches, getStandings, logout } from "../lib/actions";
+import { getDashboardMatches, logout } from "../lib/actions"; // Quitamos getStandings
 import { createClient } from "../lib/supabase/server";
 import Link from "next/link";
 import { redirect } from "next/navigation";
+
+export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
   const supabase = await createClient();
@@ -13,9 +15,12 @@ export default async function DashboardPage() {
   } = await supabase.auth.getUser();
   if (!user) redirect("/login");
 
-  // Traer datos reales en paralelo
+  // 1. Traer datos base reales (Traemos los partidos y los equipos para calcular la tabla)
   const matches = await getDashboardMatches();
-  const standings = await getStandings();
+  const { data: teams = [] } = await supabase
+    .from("teams")
+    .select("id, name, logo_url")
+    .order("name", { ascending: true });
 
   // Traer equipo favorito real
   const { data: profile } = await supabase
@@ -26,8 +31,75 @@ export default async function DashboardPage() {
 
   const favoriteTeamId = profile?.favorite_team_id;
 
+  // ====================================================================
+  // 🌟 MOTOR DE CLASIFICACIÓN EN TIEMPO REAL COHRENTE CON EL SIMULADOR
+  // ====================================================================
+  const leaderboard: Record<
+    string,
+    {
+      id: string;
+      name: string;
+      logo_url: string;
+      played: number;
+      gd: number;
+      points: number;
+    }
+  > = {};
+
+  if (teams) {
+    teams.forEach((team: any) => {
+      leaderboard[team.id] = {
+        id: team.id,
+        name: team.name,
+        logo_url: team.logo_url,
+        played: 0,
+        gd: 0,
+        points: 0,
+      };
+    });
+  }
+
+  if (matches) {
+    matches.forEach((match: any) => {
+      // Ignorar si el partido está agendado pero no jugado/simulado aún
+      if (match.status === "SCHEDULED" || match.status === null) return;
+
+      const homeId = match.home_team_id || match.home_team?.id;
+      const awayId = match.away_team_id || match.away_team?.id;
+      const homeScore = match.home_score ?? 0;
+      const awayScore = match.away_score ?? 0;
+
+      if (leaderboard[homeId] && leaderboard[awayId]) {
+        // Sumar partidos jugados
+        leaderboard[homeId].played += 1;
+        leaderboard[awayId].played += 1;
+
+        // Calcular Diferencia de Goles (GD)
+        leaderboard[homeId].gd += homeScore - awayScore;
+        leaderboard[awayId].gd += awayScore - homeScore;
+
+        // Repartir puntos reales por resultado de simulación
+        if (homeScore > awayScore) {
+          leaderboard[homeId].points += 3; // Gana local
+        } else if (awayScore > homeScore) {
+          leaderboard[awayId].points += 3; // Gana visitante
+        } else {
+          leaderboard[homeId].points += 1; // Empate
+          leaderboard[awayId].points += 1;
+        }
+      }
+    });
+  }
+
+  // Ordenar la tabla por puntos, y empate por diferencia de goles
+  const standings = Object.values(leaderboard).sort((a, b) => {
+    if (b.points !== a.points) return b.points - a.points;
+    return b.gd - a.gd;
+  });
+  // ====================================================================
+
   return (
-    <div className="min-h-screen p-4 md:p-8">
+    <div className="min-h-screen p-4 md:p-8 bg-slate-950 text-slate-100">
       {/* Header Premium */}
       <header className="backdrop-blur-md bg-slate-900/40 border border-slate-800/60 rounded-2xl max-w-7xl mx-auto mb-10 p-5 flex justify-between items-center shadow-lg">
         <div>
@@ -58,7 +130,7 @@ export default async function DashboardPage() {
 
       {/* Contenido en Dos Columnas */}
       <main className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-8">
-        {/* COLUMNA 1 e 2: PARTIDOS (Ocupa 2 columnas de 3) */}
+        {/* COLUMNA 1 e 2: PARTIDOS */}
         <div className="lg:col-span-2">
           <div className="flex items-center gap-3 mb-6">
             <div className="w-1 h-5 bg-blue-500 rounded-full"></div>
@@ -116,17 +188,25 @@ export default async function DashboardPage() {
                           </span>
                         </div>
 
-                        {/* Marcador */}
+                        {/* Marcador dinámico basado en estatus */}
                         <div className="flex items-center gap-2 bg-slate-950/90 px-3 py-1.5 rounded-xl border border-slate-800/80 font-mono text-base font-black text-blue-400">
-                          <span>{match.home_score}</span>
-                          <span className="text-slate-700">:</span>
-                          <span>{match.away_score}</span>
+                          {match.status === "SCHEDULED" ? (
+                            <span className="text-xs text-slate-500 tracking-wide font-sans font-bold uppercase px-1">
+                              VS
+                            </span>
+                          ) : (
+                            <>
+                              <span>{match.home_score}</span>
+                              <span className="text-slate-700">:</span>
+                              <span>{match.away_score}</span>
+                            </>
+                          )}
                         </div>
 
                         {/* Visitante */}
                         <div className="flex items-center gap-2.5 flex-1 justify-end text-right min-w-0">
                           <span className="font-bold text-sm tracking-tight truncate text-slate-200">
-                            + {match.away_team?.name}
+                            {match.away_team?.name}
                           </span>
                           <div className="w-10 h-10 bg-slate-950/60 border border-slate-800/80 rounded-xl flex items-center justify-center p-2 shrink-0">
                             <img
@@ -145,7 +225,7 @@ export default async function DashboardPage() {
           )}
         </div>
 
-        {/* COLUMNA 3: TABLA DE CLASIFICACIÓN (Ocupa 1 columna de 3) */}
+        {/* COLUMNA 3: TABLA DE CLASIFICACIÓN */}
         <div className="lg:col-span-1">
           <div className="flex items-center gap-3 mb-6">
             <div className="w-1 h-5 bg-emerald-500 rounded-full"></div>

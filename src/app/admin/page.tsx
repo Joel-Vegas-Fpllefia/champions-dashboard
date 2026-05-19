@@ -8,14 +8,17 @@ import {
   getUserProfiles,
   deleteUserProfile,
   createMatchEvent,
-  updateTeam, // Traemos la nueva acción
+  updateTeam,
+  updatePlayer,
+  createMatch, // Nueva acción
+  simulateMatch, // Nueva acción
 } from "../../lib/actions";
 import { createClient } from "../../lib/supabase/server";
 import Link from "next/link";
 import { MatchEventForm } from "./MatchEventForm";
-import { EditTeamForm } from "./EditTeamForm"; // Importamos el nuevo formulario dinámico
+import { EditTeamForm } from "./EditTeamForm";
 import { EditPlayerForm } from "./EditPlayerForm";
-import { updatePlayer } from "../../lib/actions";
+import { MatchManagerForm } from "./MatchManagerForm"; // Nuevo Import
 
 export const dynamic = "force-dynamic";
 
@@ -26,15 +29,20 @@ export default async function AdminPage() {
   const players = await getPlayers();
   const users = await getUserProfiles();
 
-  const { data: matches } = await supabase.from("matches").select(`
-      id,
-      home_score,
-      away_score,
-      home_team_id,
-      away_team_id,
-      home_team:teams!home_team_id(name),
-      away_team:teams!away_team_id(name)
-    `);
+  // Traemos los partidos jugados o listos para añadir actas manuales
+  const { data: allMatches } = await supabase
+    .from("matches")
+    .select(
+      "id, home_score, away_score, home_team:teams!home_team_id(name), away_team:teams!away_team_id(name)",
+    );
+
+  // Traemos por separado únicamente los partidos agendados que no se han jugado (para simular)
+  const { data: scheduledMatches } = await supabase
+    .from("matches")
+    .select(
+      "id, home_team:teams!home_team_id(name), away_team:teams!away_team_id(name)",
+    )
+    .not("status", "eq", "FINISHED"); // Suponiendo que filtras por estatus o marcadores a 0
 
   return (
     <div className="min-h-screen p-4 md:p-8 bg-slate-950 text-slate-100">
@@ -45,7 +53,7 @@ export default async function AdminPage() {
             UEFA <span className="font-light text-white">COMMAND CENTER</span>
           </h1>
           <p className="text-xs text-slate-400 mt-1">
-            Gestión Global de Usuarios, Equipos, Plantillas e Incidencias
+            Simulador de Partidos, Traspasos e Incidencias en Tiempo Real
           </p>
         </div>
         <Link
@@ -56,39 +64,49 @@ export default async function AdminPage() {
         </Link>
       </header>
 
-      {/* CUADRÍCULA */}
+      {/* PANEL DE TRES COLUMNAS */}
       <main className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-8">
-        {/* COLUMNA 1: CRUD INTERACTIVO DE EQUIPOS */}
+        {/* COLUMNA 1: OPERACIONES DE CLUBES Y PARTIDOS */}
         <div className="backdrop-blur-md bg-slate-900/40 border border-slate-800/60 rounded-3xl p-6 space-y-6 flex flex-col justify-between">
           <div className="space-y-6">
             <div className="flex items-center gap-2">
               <div className="w-1 h-5 bg-pink-500 rounded-full"></div>
               <h2 className="text-base font-bold uppercase tracking-wider text-slate-300">
-                Gestión de Equipos
+                Clubes y Competición
               </h2>
             </div>
 
-            {/* Renderizado de la lógica unificada de creación/edición */}
+            {/* Gestión e Identidad de Equipos */}
             <EditTeamForm
               teams={teams}
               createTeam={createTeam}
               updateTeam={updateTeam}
             />
+
+            <hr className="border-slate-800/50" />
+
+            {/* LÓGICA DE SIMULADOR DE PARTIDOS */}
+            <MatchManagerForm
+              teams={teams}
+              scheduledMatches={scheduledMatches || []}
+              createMatch={createMatch}
+              simulateMatch={simulateMatch}
+            />
           </div>
 
-          <div className="space-y-2 max-h-64 overflow-y-auto pr-1 mt-4">
+          <div className="space-y-2 max-h-40 overflow-y-auto pr-1 mt-4">
             <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
-              Clubes Activos
+              Clubes en el Sistema
             </p>
             {teams.map((team) => (
               <div
                 key={team.id}
-                className="flex items-center justify-between p-2.5 bg-slate-950/40 border border-slate-800/50 rounded-xl text-sm"
+                className="flex items-center justify-between p-2 bg-slate-950/40 border border-slate-800/50 rounded-xl text-xs"
               >
                 <div className="flex items-center gap-2 truncate">
                   <img
                     src={team.logo_url}
-                    className="w-5 h-5 object-contain flex-shrink-0"
+                    className="w-4 h-4 object-contain flex-shrink-0"
                     alt=""
                   />
                   <span className="truncate font-medium text-slate-300">
@@ -99,7 +117,7 @@ export default async function AdminPage() {
                   <input type="hidden" name="id" value={team.id} />
                   <button
                     type="submit"
-                    className="text-red-400 hover:text-red-500 font-bold text-xs uppercase px-2 py-1"
+                    className="text-red-400 hover:text-red-500 font-medium px-2 py-0.5"
                   >
                     Eliminar
                   </button>
@@ -109,8 +127,8 @@ export default async function AdminPage() {
           </div>
         </div>
 
-        {/* COLUMNA 2: TRASPASOS & INCIDENCIAS */}
-        <div className="backdrop-blur-md bg-slate-900/40 border border-slate-800/60 rounded-3xl p-6 space-y-8">
+        {/* COLUMNA 2: MERCADO, EDICIÓN DE JUGADORES Y ACTAS MANUALES */}
+        <div className="backdrop-blur-md bg-slate-900/40 border border-slate-800/60 rounded-3xl p-6 space-y-6">
           <div className="space-y-4">
             <div className="flex items-center gap-2">
               <div className="w-1 h-5 bg-purple-500 rounded-full"></div>
@@ -155,33 +173,37 @@ export default async function AdminPage() {
             </form>
           </div>
 
+          <div className="space-y-4">
+            <div className="flex items-center gap-2">
+              <div className="w-1 h-5 bg-indigo-500 rounded-full"></div>
+              <h2 className="text-sm font-bold uppercase tracking-wider text-slate-400">
+                Personalizar Jugadores
+              </h2>
+            </div>
+            <EditPlayerForm
+              players={players || []}
+              updatePlayer={updatePlayer}
+            />
+          </div>
+
           <hr className="border-slate-800/50" />
 
           <div className="space-y-4">
             <div className="flex items-center gap-2">
               <div className="w-1 h-5 bg-yellow-500 rounded-full"></div>
               <h2 className="text-base font-bold uppercase tracking-wider text-slate-300">
-                Acta del Partido
+                Acta Manual
               </h2>
             </div>
             <MatchEventForm
-              matches={matches || []}
+              matches={allMatches || []}
               players={players || []}
               createMatchEvent={createMatchEvent}
             />
           </div>
         </div>
-        {/* Inserta esto debajo del formulario de Mercado de Fichajes en src/app/admin/page.tsx */}
-        <div className="space-y-4 mt-6">
-          <div className="flex items-center gap-2">
-            <div className="w-1 h-5 bg-indigo-500 rounded-full"></div>
-            <h2 className="text-sm font-bold uppercase tracking-wider text-slate-400">
-              Personalizar Jugadores
-            </h2>
-          </div>
-          <EditPlayerForm players={players || []} updatePlayer={updatePlayer} />
-        </div>
-        {/* COLUMNA 3: USUARIOS */}
+
+        {/* COLUMNA 3: CONTROL DE USUARIOS */}
         <div className="backdrop-blur-md bg-slate-900/40 border border-slate-800/60 rounded-3xl p-6 space-y-6">
           <div className="flex items-center gap-2">
             <div className="w-1 h-5 bg-blue-500 rounded-full"></div>
