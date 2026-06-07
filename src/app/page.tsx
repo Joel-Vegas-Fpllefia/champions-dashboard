@@ -22,14 +22,15 @@ export default async function DashboardPage() {
     .select("id, name, logo_url")
     .order("name", { ascending: true });
 
-  // Traer equipo favorito real
+  // Traer equipo favorito real y comprobar si es admin
   const { data: profile } = await supabase
     .from("user_profiles")
-    .select("favorite_team_id")
+    .select("favorite_team_id, role")
     .eq("id", user.id)
     .single();
 
   const favoriteTeamId = profile?.favorite_team_id;
+  const isAdmin = profile?.role === "admin";
 
   // ====================================================================
   // 🌟 MOTOR DE CLASIFICACIÓN EN TIEMPO REAL COHRENTE CON EL SIMULADOR
@@ -113,6 +114,15 @@ export default async function DashboardPage() {
         </div>
 
         <div className="flex items-center gap-3">
+          {isAdmin && (
+            <Link
+              href="/admin"
+              className="text-xs font-bold uppercase tracking-wider bg-amber-500 hover:bg-amber-600 text-slate-900 px-4 py-2.5 rounded-xl shadow-lg border border-amber-400 transition-all duration-300 shadow-sm"
+            >
+              Admin Panel
+            </Link>
+          )}
+
           <Link
             href="/perfil"
             className="text-xs font-semibold uppercase tracking-wider bg-slate-800/80 hover:bg-slate-700 text-slate-300 px-4 py-2.5 rounded-xl border border-slate-700/50 transition-all duration-300 shadow-sm"
