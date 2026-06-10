@@ -8,28 +8,42 @@ import { redirect } from "next/navigation"; // <-- ¡IMPORTANTE: Añade esta lí
 /** ==========================================
  * 1. ACCIONES DE AUTENTICACIÓN (LOGIN/REGISTRO)
  * ========================================== */
-
+ 
 export async function login(formData: FormData) {
   const supabase = await createClient();
   const email = formData.get("email") as string;
   const password = formData.get("password") as string;
-
+ 
   const { error } = await supabase.auth.signInWithPassword({ email, password });
-  if (error) throw new Error(error.message);
-
-  // En lugar de revalidatePath, ahora obligamos a ir al Dashboard principal
+  if (error) {
+    const messages: Record<string, string> = {
+      "Invalid login credentials": "Correo o contraseña incorrectos.",
+      "Email not confirmed": "Debes confirmar tu correo antes de iniciar sesión.",
+      "Too many requests": "Demasiados intentos. Espera unos minutos e inténtalo de nuevo.",
+    };
+    return { error: messages[error.message] ?? error.message };
+  }
+ 
   redirect("/");
 }
+ 
 
 export async function signUp(formData: FormData) {
   const supabase = await createClient();
   const email = formData.get("email") as string;
   const password = formData.get("password") as string;
-
+ 
   const { error } = await supabase.auth.signUp({ email, password });
-  if (error) throw new Error(error.message);
-
-  // Tras registrarse con éxito, lo mandamos directo adentro
+  if (error) {
+    const messages: Record<string, string> = {
+      "User already registered": "Ya existe una cuenta con este correo. Prueba a iniciar sesión.",
+      "Password should be at least 6 characters": "La contraseña debe tener al menos 6 caracteres.",
+      "Unable to validate email address: invalid format": "El formato del correo no es válido.",
+      "Signup is disabled": "El registro está deshabilitado en este momento.",
+    };
+    return { error: messages[error.message] ?? error.message };
+  }
+ 
   redirect("/");
 }
 
@@ -600,3 +614,104 @@ export async function simulateMatch(formData: FormData) {
   revalidatePath(`/matches/${matchId}`);
   revalidatePath("/");
 }
+
+/** ==========================================
+ * 6. COMENTARIOS DE PARTIDOS
+ * ========================================== */
+
+export async function getComments(matchId: string) {
+  const supabase = await createClient();
+
+  const { data, error } = await supabase
+    .from("comments")
+    .select("id, content, created_at, user_id")
+    .eq("match_id", matchId)
+    .order("created_at", { ascending: true });
+
+  if (error) {
+    console.error("Error al traer comentarios:", error.message);
+    return [];
+  }
+  return data || [];
+}
+
+export async function addComment(formData: FormData) {
+  const supabase = await createClient();
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) throw new Error("Debes iniciar sesión para comentar.");
+
+  const matchId = formData.get("matchId") as string;
+  const content = (formData.get("content") as string)?.trim();
+
+  if (!content || content.length < 1) throw new Error("El comentario no puede estar vacío.");
+  if (content.length > 500) throw new Error("Máximo 500 caracteres.");
+
+  const { error } = await supabase.from("comments").insert([
+    { match_id: matchId, user_id: user.id, content },
+  ]);
+
+  if (error) throw new Error(error.message);
+
+  revalidatePath(`/matches/${matchId}`);
+}
+
+export async function deleteComment(formData: FormData) {
+  const supabase = await createClient();
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) throw new Error("No autenticado.");
+
+  const commentId = formData.get("commentId") as string;
+
+  const { error } = await supabase
+    .from("comments")
+    .delete()
+    .eq("id", commentId)
+    .eq("user_id", user.id); // Solo puede borrar el autor
+
+  if (error) throw new Error(error.message);
+  revalidatePath("/matches");
+}
+
+/** ==========================================
+ * 7. GESTIÓN DE ROLES (Solo ADMIN)
+ * ========================================== */
+
+export async function changeUserRole(formData: FormData) {
+  const supabase = await createClient();
+
+  // Solo un admin puede cambiar roles
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) throw new Error("No autenticado.");
+
+  const { data: callerProfile } = await supabase
+    .from("user_profiles")
+    .select("role")
+    .eq("id", user.id)
+    .single();
+
+  if (callerProfile?.role !== "admin") throw new Error("Acceso denegado. Solo los administradores pueden cambiar roles.");
+
+  const targetUserId = formData.get("userId") as string;
+  const newRole = formData.get("role") as string;
+
+  const validRoles = ["user", "editor", "admin"];
+  if (!validRoles.includes(newRole)) throw new Error("Rol no válido.");
+
+  const { error } = await supabase
+    .from("user_profiles")
+    .update({ role: newRole })
+    .eq("id", targetUserId);
+
+  if (error) throw new Error(error.message);
+
+  revalidatePath("/admin");
+}
+

@@ -1,36 +1,39 @@
 // src/app/page.tsx
-import { getDashboardMatches, logout } from "../lib/actions"; // Quitamos getStandings
+import { getDashboardMatches, logout } from "../lib/actions";
 import { createClient } from "../lib/supabase/server";
 import Link from "next/link";
-import { redirect } from "next/navigation";
 
 export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
   const supabase = await createClient();
 
-  // Validar usuario real
+  // Obtener usuario (puede ser null si no está logueado - ruta pública)
   const {
     data: { user },
   } = await supabase.auth.getUser();
-  if (!user) redirect("/login");
 
-  // 1. Traer datos base reales (Traemos los partidos y los equipos para calcular la tabla)
+  // 1. Traer datos base reales (públicos)
   const matches = await getDashboardMatches();
   const { data: teams = [] } = await supabase
     .from("teams")
     .select("id, name, logo_url")
     .order("name", { ascending: true });
 
-  // Traer equipo favorito real y comprobar si es admin
-  const { data: profile } = await supabase
-    .from("user_profiles")
-    .select("favorite_team_id, role")
-    .eq("id", user.id)
-    .single();
+  // Traer perfil del usuario si está logueado
+  let favoriteTeamId = null;
+  let userRole: string | null = null;
+  if (user) {
+    const { data: profile } = await supabase
+      .from("user_profiles")
+      .select("favorite_team_id, role")
+      .eq("id", user.id)
+      .single();
+    favoriteTeamId = profile?.favorite_team_id ?? null;
+    userRole = profile?.role ?? "user";
+  }
 
-  const favoriteTeamId = profile?.favorite_team_id;
-  const isAdmin = profile?.role === "admin";
+  const isStaff = userRole === "admin" || userRole === "editor";
 
   // ====================================================================
   // 🌟 MOTOR DE CLASIFICACIÓN EN TIEMPO REAL COHRENTE CON EL SIMULADOR
@@ -107,34 +110,48 @@ export default async function DashboardPage() {
           <h1 className="text-2xl font-black tracking-wider bg-clip-text text-transparent bg-gradient-to-r from-white via-slate-200 to-blue-400">
             CHAMPIONS<span className="text-blue-500 font-light">DASH</span>
           </h1>
-          <p className="text-xs text-slate-400 mt-1 flex items-center gap-1.5">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-            <span className="font-mono text-slate-300">{user.email}</span>
-          </p>
+          {user ? (
+            <p className="text-xs text-slate-400 mt-1 flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+              <span className="font-mono text-slate-300">{user.email}</span>
+            </p>
+          ) : (
+            <p className="text-xs text-slate-500 mt-1">Modo público — Inicia sesión para más opciones</p>
+          )}
         </div>
 
         <div className="flex items-center gap-3">
-          {isAdmin && (
+          {isStaff && (
             <Link
               href="/admin"
-              className="text-xs font-bold uppercase tracking-wider bg-amber-500 hover:bg-amber-600 text-slate-900 px-4 py-2.5 rounded-xl shadow-lg border border-amber-400 transition-all duration-300 shadow-sm"
+              className="text-xs font-bold uppercase tracking-wider bg-amber-500 hover:bg-amber-600 text-slate-900 px-4 py-2.5 rounded-xl shadow-lg border border-amber-400 transition-all duration-300"
             >
-              Admin Panel
+              ⚙️ Admin Panel
             </Link>
           )}
 
-          <Link
-            href="/perfil"
-            className="text-xs font-semibold uppercase tracking-wider bg-slate-800/80 hover:bg-slate-700 text-slate-300 px-4 py-2.5 rounded-xl border border-slate-700/50 transition-all duration-300 shadow-sm"
-          >
-            Mi Perfil
-          </Link>
-
-          <form action={logout}>
-            <button className="text-xs font-semibold uppercase tracking-wider bg-slate-800/80 hover:bg-red-950/40 hover:text-red-400 hover:border-red-900/50 text-slate-300 px-4 py-2.5 rounded-xl border border-slate-700/50 transition-all duration-300 shadow-sm">
-              Cerrar Sesión
-            </button>
-          </form>
+          {user ? (
+            <>
+              <Link
+                href="/perfil"
+                className="text-xs font-semibold uppercase tracking-wider bg-slate-800/80 hover:bg-slate-700 text-slate-300 px-4 py-2.5 rounded-xl border border-slate-700/50 transition-all duration-300 shadow-sm"
+              >
+                Mi Perfil
+              </Link>
+              <form action={logout}>
+                <button className="text-xs font-semibold uppercase tracking-wider bg-slate-800/80 hover:bg-red-950/40 hover:text-red-400 hover:border-red-900/50 text-slate-300 px-4 py-2.5 rounded-xl border border-slate-700/50 transition-all duration-300 shadow-sm">
+                  Cerrar Sesión
+                </button>
+              </form>
+            </>
+          ) : (
+            <Link
+              href="/login"
+              className="text-xs font-bold uppercase tracking-wider bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-xl border border-blue-500 transition-all duration-300"
+            >
+              Iniciar Sesión
+            </Link>
+          )}
         </div>
       </header>
 
