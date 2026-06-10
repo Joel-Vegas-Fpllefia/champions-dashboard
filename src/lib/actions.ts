@@ -52,7 +52,7 @@ export async function logout() {
   await supabase.auth.signOut();
 
   // Al cerrar sesión, lo expulsamos formalmente a la página de login
-  redirect("/login");
+  redirect("/");
 }
 
 /** ==========================================
